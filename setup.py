@@ -6,7 +6,7 @@ HERE = pathlib.Path(__file__).parent
 README = (HERE / "README.md").read_text()
 
 setup(
-    name='Refrapt',
+    name='refrapt',
     version='0.4.10',
     description='A tool to mirror Debian repositories for use as a local mirror.',
     python_requires='>=3.9',
