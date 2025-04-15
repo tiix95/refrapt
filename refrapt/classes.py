@@ -791,7 +791,7 @@ class Downloader:
         """Setup filelock for quieter logging and handling of lock files (unix)."""
 
         # Quieten filelock's logger
-        filelock.logger().setLevel(logging.CRITICAL)
+        logging.getLogger("filelock._api").setLevel(logging.CRITICAL)
 
         # filelock does not delete releasd lock files on Unix due
         # to potential race conditions in the event of multiple
