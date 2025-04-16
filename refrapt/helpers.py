@@ -1,19 +1,19 @@
 """Helper methods for use with Refrapt."""
 
-import re
-import os
-import gzip
-import lzma
-import bz2
-import shutil
-import logging
+from re import sub
+from os.path import isfile
+from gzip import open as gzip_open
+from lzma import open as lzma_open
+from bz2 import open as bz2_open
+from shutil import copyfileobj
+from logging import getLogger
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 def SanitiseUri(uri: str) -> str:
     """Sanitise a Uri so it is suitable for filesystem use."""
-    uri = re.sub(r"^(\w+)://", "", uri)
-    uri = re.sub(r":\d+", "", uri) # Port information
+    uri = sub(r"^(\w+)://", "", uri)
+    uri = sub(r":\d+", "", uri) # Port information
 
     return uri
 
@@ -41,17 +41,17 @@ def UnzipFile(file: str):
         Therefore, prefer .xz files.
     """
 
-    if os.path.isfile(f"{file}.xz"):
-        with lzma.open(f"{file}.xz", "rb") as f:
+    if isfile(f"{file}.xz"):
+        with lzma_open(f"{file}.xz", "rb") as f:
             with open(file, "wb") as out:
-                shutil.copyfileobj(f, out)
-    elif os.path.isfile(f"{file}.gz"):
-        with gzip.open(f"{file}.gz", "rb") as f:
+                copyfileobj(f, out)
+    elif isfile(f"{file}.gz"):
+        with gzip_open(f"{file}.gz", "rb") as f:
             with open(file, "wb") as out:
-                shutil.copyfileobj(f, out)
-    elif os.path.isfile(f"{file}.bz2"):
-        with bz2.open(f"{file}.bz2", "rb") as f:
+                copyfileobj(f, out)
+    elif isfile(f"{file}.bz2"):
+        with bz2_open(f"{file}.bz2", "rb") as f:
             with open(file, "wb") as out:
-                shutil.copyfileobj(f, out)
+                copyfileobj(f, out)
     else:
         logger.warning(f"File '{file}' has an unsupported compression format")
