@@ -1,22 +1,22 @@
-import multiprocessing
-import logging
+from multiprocessing import cpu_count
+from logging import getLogger, _nameToLevel
 from pathlib import Path
-import platform
-import locale
+from platform import machine
+from locale import getlocale
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 class Settings:
     """Contains the loaded settings for the application."""
 
     _settings = {
-        "architecture"      : platform.machine().lower(),
+        "architecture"      : machine().lower(),
         "rootPath"          : f"{str(Path.home())}/refrapt",
         "mirrorPath"        : f"{str(Path.home())}/refrapt/mirror",
         "skelPath"          : f"{str(Path.home())}/refrapt/skel",
         "varPath"           : f"{str(Path.home())}/refrapt/var",
         "contents"          : True,
-        "threads"           : multiprocessing.cpu_count(),
+        "threads"           : cpu_count(),
         "authNoChallenge"   : False,
         "noCheckCertificate": False,
         "unlink"            : False,
@@ -29,7 +29,7 @@ class Settings:
         "caCertificate"     : "",
         "privateKey"        : "",
         "limitRate"         : "500m", # Wget syntax
-        "language"          : [locale.getdefaultlocale()[0]],
+        "language"          : [getlocale()[0]],
         "forceUpdate"       : False,  # Use this to flag every single file as requiring an update, regardless of if the size matches. Use this if you know a file has changed, but you still have the old version (sizes were equal)
         "logLevel"          : "INFO",
         "test"              : False,
@@ -201,7 +201,7 @@ class Settings:
     @staticmethod
     def LogLevel() -> int:
         """Get the log level used for application logger."""
-        return int(logging._nameToLevel[str(Settings._settings["logLevel"])])
+        return int(_nameToLevel[str(Settings._settings["logLevel"])])
 
     @staticmethod
     def ByHash() -> bool:
