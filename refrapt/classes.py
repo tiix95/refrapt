@@ -1,23 +1,24 @@
 """Classes for abstraction and use with Refrapt."""
 
 from enum import Enum
-import logging
-import os
-import multiprocessing
-import re
+from logging import getLogger, debug, CRITICAL
+from os.path import isfile, isdir, normpath, getsize, getmtime, splitext
+from os import listdir, remove, sep, system
+from multiprocessing import Pool, current_process
+from re import search, match
 from functools import partial
 from dataclasses import dataclass
-import collections
+from collections import defaultdict
 from pathlib import Path
 from abc import ABC, abstractmethod
 
-import tqdm
-import filelock
+from tqdm import tqdm
+from filelock import FileLock
 
 from refrapt.helpers import SanitiseUri, UnzipFile
 from refrapt.settings import Settings
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 class RepositoryType(Enum):
     """Distinguish between Binary and Source mirrors."""
@@ -137,7 +138,7 @@ class Repository:
         releaseFiles.append(baseUrl + "Release.gpg")
 
         for file in releaseFiles:
-            file = os.path.normpath(file)
+            file = normpath(file)
 
         return releaseFiles
 
@@ -175,7 +176,7 @@ class Repository:
         # Default to InRelease
         releaseFileToRead = inReleaseFilePath
 
-        if not os.path.isfile(inReleaseFilePath):
+        if not isfile(inReleaseFilePath):
             # Fall back to Release
             releaseFileToRead = releaseFilePath
 
@@ -191,7 +192,7 @@ class Repository:
                     checksums = False
 
                 if checksums:
-                    if re.search("^ +(.*)$", line):
+                    if search("^ +(.*)$", line):
                         parts = list(filter(None, line.split(" ")))
 
                         # parts[0] = checksum
@@ -208,54 +209,54 @@ class Repository:
                         if self._repositoryType == RepositoryType.Bin:
                             for architecture in self._architectures:
                                 if Settings.Contents():
-                                    if re.match(rf"Contents-{architecture}", filename):
+                                    if match(rf"Contents-{architecture}", filename):
                                         indexFiles.append(f"{baseUrl}{filename}")
 
                                 if self._components:
                                     for component in self._components:
                                         if Settings.Contents():
-                                            if re.search(rf"{component}/Contents-{architecture}", filename):
+                                            if search(rf"{component}/Contents-{architecture}", filename):
                                                 indexFiles.append(f"{baseUrl}{filename}")
 
                                         binaryByHash = rf"{baseUrl}{component}/binary-{architecture}/by-hash/{checksumType}/{checksum}"
 
-                                        if re.match(rf"{component}/binary-{architecture}/Release", filename):
+                                        if match(rf"{component}/binary-{architecture}/Release", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(binaryByHash)
 
-                                        if re.match(rf"{component}/binary-{architecture}/Packages", filename):
+                                        if match(rf"{component}/binary-{architecture}/Packages", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
 
-                                            if re.match(rf"{component}/binary-{architecture}/Packages[^./]*(\.gz|\.bz2|\.xz|$)$", filename):
+                                            if match(rf"{component}/binary-{architecture}/Packages[^./]*(\.gz|\.bz2|\.xz|$)$", filename):
                                                 self._packageCollection.Add(component, architecture, f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(binaryByHash)
 
-                                        if re.match(rf"{component}/cnf/Commands-{architecture}", filename):
+                                        if match(rf"{component}/cnf/Commands-{architecture}", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(rf"{baseUrl}{component}/cnf/by-hash/{checksumType}/{checksum}")
 
                                         i18nByHash = rf"{baseUrl}{component}/i18n/by-hash/{checksumType}/{checksum}"
 
-                                        if re.match(rf"{component}/i18n/cnf/Commands-{architecture}", filename):
+                                        if match(rf"{component}/i18n/cnf/Commands-{architecture}", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(i18nByHash)
 
-                                        if re.match(rf"{component}/i18n/Index", filename):
+                                        if match(rf"{component}/i18n/Index", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(i18nByHash)
 
                                         for language in Settings.Language():
-                                            if re.match(rf"{component}/i18n/Translation-{language}", filename):
+                                            if match(rf"{component}/i18n/Translation-{language}", filename):
                                                 indexFiles.append(f"{baseUrl}{filename}")
                                                 if Settings.ByHash():
                                                     indexFiles.append(i18nByHash)
 
-                                        if re.match(rf"{component}/dep11/(Components-{architecture}\.yml|icons-[^./]+\.tar)", filename):
+                                        if match(rf"{component}/dep11/(Components-{architecture}\.yml|icons-[^./]+\.tar)", filename):
                                             indexFiles.append(f"{baseUrl}{filename}")
                                             if Settings.ByHash():
                                                 indexFiles.append(f"{baseUrl}{component}/dep11/by-hash/{checksumType}/{checksum}")
@@ -265,10 +266,10 @@ class Repository:
 
                         elif self._repositoryType == RepositoryType.Src:
                             for component in self._components:
-                                if re.match(rf"{component}/source/Release", filename):
+                                if match(rf"{component}/source/Release", filename):
                                     indexFiles.append(f"{baseUrl}{filename}")
 
-                                if re.match(rf"{component}/source/Sources[^./]*(\.gz|\.bz2|\.xz|$)$", filename):
+                                if match(rf"{component}/source/Sources[^./]*(\.gz|\.bz2|\.xz|$)$", filename):
                                     indexFiles.append(f"{baseUrl}{filename}")
                                     self._sourceCollection.Add(component, f"{baseUrl}{filename}")
                     else:
@@ -282,7 +283,7 @@ class Repository:
             self._sourceCollection.DetermineCurrentTimestamps()
 
         for file in indexFiles:
-            file = os.path.normpath(file)
+            file = normpath(file)
 
         return list(set(indexFiles)) # Remove duplicates caused by reading multiple listings for each checksum type
 
@@ -327,8 +328,8 @@ class Repository:
         elif self.RepositoryType == RepositoryType.Src:
             indexType = "Sources      "
 
-        with multiprocessing.Pool(Settings.Threads()) as pool:
-            for _ in tqdm.tqdm(pool.imap_unordered(UnzipFile, indexFiles), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
+        with Pool(Settings.Threads()) as pool:
+            for _ in tqdm(pool.imap_unordered(UnzipFile, indexFiles), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
                 pass
 
     def ParseIndexFiles(self) -> list[Package]:
@@ -349,7 +350,7 @@ class Repository:
 
         fileList = [] # type: list[Package]
 
-        for file in tqdm.tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+        for file in tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
             fileList += self._ProcessIndex(Settings.SkelPath(), file, False)
 
         return fileList
@@ -366,7 +367,7 @@ class Repository:
 
         fileList = [] # type: list[Package]
 
-        for file in tqdm.tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+        for file in tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
             fileList += self._ProcessIndex(Settings.MirrorPath(), file, True)
 
         return fileList
@@ -389,7 +390,7 @@ class Repository:
 
         fileList = [] # type: list[Package]
 
-        for file in tqdm.tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+        for file in tqdm(indices, position=1, unit=" index", desc="Indices      ", leave=False, disable=not Settings.ProgressBarsEnabled()):
             fileList += self._ProcessIndex(Settings.SkelPath(), file, True)
 
         return [x.Filename for x in fileList if x.Latest]
@@ -405,7 +406,7 @@ class Repository:
         logger.debug(f"Checking repo exists: {repositoryDirectory}")
 
         path = Path(repositoryDirectory)
-        return os.path.isdir(path.parent.absolute())
+        return isdir(path.parent.absolute())
 
     def _ProcessIndex(self, indexRoot: str, index: str, skipUpdateCheck: bool) -> list[Package]:
         """
@@ -426,13 +427,13 @@ class Repository:
 
         indexFile = Index(f"{indexRoot}/{index}")
         indexFile.Read()
-        logging.debug(f"Processing Index file: {indexRoot}/{index}")
+        debug(f"Processing Index file: {indexRoot}/{index}")
 
         packages = indexFile.GetPackages() # type: list[dict[str,str]]
 
         mirror = Settings.MirrorPath() + "/" + path
 
-        for package in tqdm.tqdm(packages, position=2, unit=" pkgs", desc="Packages     ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
+        for package in tqdm(packages, position=2, unit=" pkgs", desc="Packages     ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
             if "Filename" in package:
                 # Packages Index
                 filename = package["Filename"]
@@ -440,7 +441,7 @@ class Repository:
                 if filename.startswith("./"):
                     filename = filename[2:]
 
-                packageList.append(Package(os.path.normpath(f"{path}/{filename}"), int(package["Size"]), skipUpdateCheck or not self._NeedUpdate(os.path.normpath(f"{mirror}/{filename}"), int(package["Size"]))))
+                packageList.append(Package(normpath(f"{path}/{filename}"), int(package["Size"]), skipUpdateCheck or not self._NeedUpdate(normpath(f"{mirror}/{filename}"), int(package["Size"]))))
             else:
                 # Sources Index
                 for key, value in package.items():
@@ -456,7 +457,7 @@ class Repository:
                             if filename.startswith("./"):
                                 filename = filename[2:]
 
-                            packageList.append(Package(os.path.normpath(f"{path}/{directory}/{filename}"), size, skipUpdateCheck or not self._NeedUpdate(os.path.normpath(f"{mirror}/{directory}/{filename}"), size)))
+                            packageList.append(Package(normpath(f"{path}/{directory}/{filename}"), size, skipUpdateCheck or not self._NeedUpdate(normpath(f"{mirror}/{directory}/{filename}"), size)))
 
         if [x for x in packageList if not x.Latest]:
             logger.debug(f"Packages to update ({len([x for x in packageList if not x.Latest])}):")
@@ -491,8 +492,8 @@ class Repository:
         if Settings.ForceUpdate():
             return True
 
-        if os.path.isfile(path):
-            return os.path.getsize(path) != size
+        if isfile(path):
+            return getsize(path) != size
 
         return True
 
@@ -630,7 +631,7 @@ class PackageCollection(IndexCollection):
 
     def __init__(self, components: list, architectures: list):
         """Initialises a PackageCollection with a dictionary of each Component and Architecture."""
-        self._packageCollection = collections.defaultdict(lambda : collections.defaultdict(dict)) # type: dict[str, dict[str, dict[str, Timestamp]]] # For each component, each architecture, for each file, timestamp
+        self._packageCollection = defaultdict(lambda : defaultdict(dict)) # type: dict[str, dict[str, dict[str, Timestamp]]] # For each component, each architecture, for each file, timestamp
 
         # Initialise the collection
         for component in components:
@@ -649,8 +650,8 @@ class PackageCollection(IndexCollection):
         for component in self._packageCollection:
             for architecture in self._packageCollection[component]:
                 for file in self._packageCollection[component][architecture]:
-                    if os.path.isfile(f"{Settings.SkelPath()}/{file}"):
-                        self._packageCollection[component][architecture][file].Current = os.path.getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
+                    if isfile(f"{Settings.SkelPath()}/{file}"):
+                        self._packageCollection[component][architecture][file].Current = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
                         logger.debug(f"\tCurrent: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Current}")
 
     def DetermineDownloadTimestamps(self):
@@ -660,7 +661,7 @@ class PackageCollection(IndexCollection):
         """
 
         logger.debug("Getting timestamps of downloaded files in Skel")
-        removables = collections.defaultdict(dict) # type: dict[str, dict[str, list[str]]]
+        removables = defaultdict(dict) # type: dict[str, dict[str, list[str]]]
         for component in self._packageCollection:
             for architecture in self._packageCollection[component]:
                 removables[component][architecture] = list()
@@ -668,8 +669,8 @@ class PackageCollection(IndexCollection):
         for component in self._packageCollection:
             for architecture in self._packageCollection[component]:
                 for file in self._packageCollection[component][architecture]:
-                    if os.path.isfile(f"{Settings.SkelPath()}/{file}"):
-                        self._packageCollection[component][architecture][file].Download = os.path.getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
+                    if isfile(f"{Settings.SkelPath()}/{file}"):
+                        self._packageCollection[component][architecture][file].Download = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
                         logger.debug(f"\tDownload: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Download}")
                     else:
                         # File does not exist after download, therefore it does not exist in the repository, and can be marked for removal
@@ -699,7 +700,7 @@ class PackageCollection(IndexCollection):
                         addFile = not self._packageCollection[component][architecture][file].Modified or Settings.PreviousRunInterrupted() or Settings.ForceUpdate()
 
                     if addFile:
-                        filename, _ = os.path.splitext(file)
+                        filename, _ = splitext(file)
                         files.append(filename)
 
         return list(set(files)) # Ensure uniqueness due to stripped extension
@@ -715,7 +716,7 @@ class SourceCollection(IndexCollection):
 
     def __init__(self, components: list):
         """Initialises a SourceCollection with a dictionary of each Component."""
-        self._sourceCollection = collections.defaultdict(dict) # type: dict[str, dict[str, Timestamp]] # For each component, for each file, timestamp
+        self._sourceCollection = defaultdict(dict) # type: dict[str, dict[str, Timestamp]] # For each component, for each file, timestamp
 
         # Initialise the collection
         for component in components:
@@ -732,8 +733,8 @@ class SourceCollection(IndexCollection):
         # Gather timestamps for all files (that exist)
         for component in self._sourceCollection:
             for file in self._sourceCollection[component]:
-                if os.path.isfile(f"{Settings.SkelPath()}/{file}"):
-                    self._sourceCollection[component][file].Current = os.path.getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
+                if isfile(f"{Settings.SkelPath()}/{file}"):
+                    self._sourceCollection[component][file].Current = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
                     logger.debug(f"\tCurrent: [{component}] [{file}]: {self._sourceCollection[component][file].Current}")
 
     def DetermineDownloadTimestamps(self):
@@ -743,14 +744,14 @@ class SourceCollection(IndexCollection):
         """
 
         logger.debug("Getting timestamps of downloaded files in Skel")
-        removables = collections.defaultdict(dict) # type: dict[str, list[str]]
+        removables = defaultdict(dict) # type: dict[str, list[str]]
         for component in self._sourceCollection:
             removables[component] = list()
 
         for component in self._sourceCollection:
             for file in self._sourceCollection[component]:
-                if os.path.isfile(f"{Settings.SkelPath()}/{file}"):
-                    self._sourceCollection[component][file].Download = os.path.getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
+                if isfile(f"{Settings.SkelPath()}/{file}"):
+                    self._sourceCollection[component][file].Download = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
                     logger.debug(f"\tDownload: [{component}] [{file}]: {self._sourceCollection[component][file].Download}")
                 else:
                     # File does not exist after download, therefore it does not exist in the repository, and can be marked for removal
@@ -778,7 +779,7 @@ class SourceCollection(IndexCollection):
                     addFile = not self._sourceCollection[component][file].Modified or Settings.PreviousRunInterrupted() or Settings.ForceUpdate()
 
                 if addFile:
-                    filename, _ = os.path.splitext(file)
+                    filename, _ = splitext(file)
                     files.append(filename)
 
         return list(set(files)) # Ensure uniqueness due to stripped extension
@@ -791,7 +792,7 @@ class Downloader:
         """Setup filelock for quieter logging and handling of lock files (unix)."""
 
         # Quieten filelock's logger
-        logging.getLogger("filelock._api").setLevel(logging.CRITICAL)
+        getLogger("filelock._api").setLevel(CRITICAL)
 
         # filelock does not delete releasd lock files on Unix due
         # to potential race conditions in the event of multiple
@@ -799,9 +800,9 @@ class Downloader:
         # Refrapt only uses them to track whether a file was fully
         # downloaded or not in the event of interruption, so we
         # can cleanup the files now.
-        for file in os.listdir(Settings.VarPath()):
+        for file in listdir(Settings.VarPath()):
             if ".lock" in file:
-                os.remove(f"{Settings.VarPath()}/{file}")
+                remove(f"{Settings.VarPath()}/{file}")
 
     @staticmethod
     def Download(urls: list, kind: UrlType):
@@ -814,15 +815,15 @@ class Downloader:
 
         logger.info(f"Downloading {len(urls)} {kind.name} files...")
 
-        with multiprocessing.Pool(Settings.Threads()) as pool:
+        with Pool(Settings.Threads()) as pool:
             downloadFunc = partial(Downloader.DownloadUrlsProcess, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
-            for _ in tqdm.tqdm(pool.imap_unordered(downloadFunc, urls), total=len(urls), unit=" file", disable=not Settings.ProgressBarsEnabled()):
+            for _ in tqdm(pool.imap_unordered(downloadFunc, urls), total=len(urls), unit=" file", disable=not Settings.ProgressBarsEnabled()):
                 pass
 
     @staticmethod
     def DownloadUrlsProcess(url: str, kind: str, args: list, logPath: str, rateLimit: str):
         """Worker method for downloading a particular Url, used in multiprocessing."""
-        process = multiprocessing.current_process()
+        process = current_process()
 
         baseCommand   = "wget --no-cache -N --no-verbose"
         rateLimit     = f"--limit-rate={rateLimit}"
@@ -833,20 +834,20 @@ class Downloader:
         filename = f"{logPath}/Download-lock.{process._identity[0]}"
 
         # Ensure forward slashes are used for URLs
-        normalisedUrl = url.replace(os.sep, '/')
+        normalisedUrl = url.replace(sep, '/')
 
         command = f"{baseCommand} {rateLimit} {retries} {recursiveOpts} {logFile} {normalisedUrl}"
 
         if args:
             command += f" {' '.join(args)}"
 
-        with filelock.FileLock(f"{filename}.lock"):
+        with FileLock(f"{filename}.lock"):
             with open(filename, "w") as f:
                 f.write(normalisedUrl)
 
-            os.system(command)
+            system(command)
 
-            os.remove(filename)
+            remove(filename)
 
     @staticmethod
     def CustomArguments() -> list:
@@ -928,7 +929,7 @@ class Index:
                 packages.append(package)
                 package = dict()
             else:
-                match = re.search(r"^([\w\-]+:)", line)
+                match = search(r"^([\w\-]+:)", line)
                 if not match and key:
                     # Value continues on next line, append data
                     package[key] += f"\n{line.strip()}"
