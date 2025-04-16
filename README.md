@@ -75,3 +75,10 @@ To attain the best of both worlds, Refrapt uses lock files. Just before the call
 If you found this software helpful, consider a small contribution. Thanks very much!
 
 [![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=F9XAHN4UUCKFJ)
+
+## Bugfixes
+------------
+
+Fixed in this fork :
+
+ - Usage of last version of filelock : https://github.com/tiix95/refrapt/commit/c1b79b726903900418db059db8f5372f3d7825af (https://github.com/tox-dev/filelock/issues/59)
