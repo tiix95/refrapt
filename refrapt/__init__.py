@@ -1,9 +1,9 @@
 """Python Debian mirroring tool."""
 
 from sys import stdout, exit as sys_exit
-import logging
-from logging.handlers import RotatingFileHandler
-import os
+from logging import getLogger, Formatter, StreamHandler
+from os import chdir, listdir, remove, makedirs, walk
+from os.path import isfile, isdir, islink, getmtime, normpath, join, getsize
 from time import perf_counter
 from pathlib import Path
 from math import floor, log, pow as math_pow
@@ -11,9 +11,7 @@ from shutil import copyfile
 from datetime import timedelta
 from typing import Optional
 
-import site
-
-import tqdm
+from tqdm import tqdm
 from filelock import FileLock
 
 from refrapt.classes import (
@@ -27,21 +25,21 @@ from refrapt.classes import (
 from refrapt.helpers import SanitiseUri
 from refrapt.settings import Settings
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
+#logFormatter = Formatter("%(asctime)s [%(levelname)8s][%(name)s:%(filename)s:%(lineno)s %(funcName)20s()] - %(message)10s")
+#console = StreamHandler()
+#console.setFormatter(logFormatter)
+#logger.addHandler(console)
 
 repositories = [] # type: list[Repository]
 filesToKeep = [] # type : list[str]
 appLockFile = "refrapt-lock"
 
-def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = True, up_logger: Optional[logging.Logger] = None):
+def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = True):
     """A tool to mirror Debian Repositories for use as a local mirror."""
 
     global repositories
     global filesToKeep
-    global logger
-
-    if up_logger:
-        logger = up_logger
 
     startTime = perf_counter()
 
@@ -51,7 +49,7 @@ def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = 
 
     # Parse the configuration file
     Settings.Parse(configData)
-    logging.getLogger().setLevel(Settings.LogLevel())
+    getLogger().setLevel(Settings.LogLevel())
 
     # Ensure that command line argument for Test overrides if it is set in the configuration file
     if test:
@@ -78,10 +76,10 @@ def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = 
     Downloader.Init()
 
     # Change to the Skel directory for working repository structure
-    os.chdir(Settings.SkelPath())
+    chdir(Settings.SkelPath())
 
     # Check for any "-lock" files.
-    for file in os.listdir(Settings.VarPath()):
+    for file in listdir(Settings.VarPath()):
         if "Download-lock" in file:
             # A download was in progress and interrupted. This means a
             # partial download will be sitting on the drive. Remove
@@ -91,10 +89,10 @@ def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = 
                 uri = f.readline()
 
             uri = SanitiseUri(uri)
-            if os.path.isfile(f"{Settings.MirrorPath()}/{uri}"):
-                os.remove(f"{Settings.MirrorPath()}/{uri}")
-            elif os.path.isfile(f"{Settings.VarPath()}/{uri}"):
-                os.remove(f"{Settings.VarPath()}/{uri}")
+            if isfile(f"{Settings.MirrorPath()}/{uri}"):
+                remove(f"{Settings.MirrorPath()}/{uri}")
+            elif isfile(f"{Settings.VarPath()}/{uri}"):
+                remove(f"{Settings.VarPath()}/{uri}")
             logger.info(f"Removed incomplete download {uri}")
         if appLockFile in file:
             # Refrapt was interrupted during processing.
@@ -106,27 +104,25 @@ def main(conf: str, test: bool = False, clean: bool = True, no_progress: bool = 
 
     # Delete existing /var files
     logger.info("Removing previous /var files...")
-    for item in os.listdir(Settings.VarPath()):
-        os.remove(f"{Settings.VarPath()}/{item}")
+    for item in listdir(Settings.VarPath()):
+        remove(f"{Settings.VarPath()}/{item}")
 
     # Create a lock file for the Application
     with FileLock(f"{Settings.VarPath()}/{appLockFile}.lock"):
         with open(f"{Settings.VarPath()}/{appLockFile}", "w+") as f:
             pass
 
-        print()
         if clean:
             PerformClean()
         else:
             PerformMirroring()
 
     # Lock file no longer required
-    os.remove(f"{Settings.VarPath()}/{appLockFile}")
-    if os.path.isfile(f"{Settings.VarPath()}/{appLockFile}.lock"):
+    remove(f"{Settings.VarPath()}/{appLockFile}")
+    if isfile(f"{Settings.VarPath()}/{appLockFile}.lock"):
         # Requires manual deletion on Unix
-        os.remove(f"{Settings.VarPath()}/{appLockFile}.lock")
+        remove(f"{Settings.VarPath()}/{appLockFile}.lock")
 
-    print()
     logger.info(f"Refrapt completed in {timedelta(seconds=round(perf_counter() - startTime))}")
 
 def PerformClean():
@@ -135,13 +131,12 @@ def PerformClean():
     global filesToKeep
 
     logger.info("## Clean Mode ##")
-    print()
 
     cleanRepositories = []
 
     # 1. Ensure that the Repositories are actually on disk
     for repository in repositories:
-        if os.path.isdir(f"{Settings.MirrorPath()}/{SanitiseUri(repository.Uri)}/dists/{repository.Distribution}"):
+        if isdir(f"{Settings.MirrorPath()}/{SanitiseUri(repository.Uri)}/dists/{repository.Distribution}"):
             cleanRepositories.append(repository)
         else:
             logger.debug(f"Repository not found on disk: {SanitiseUri(repository.Uri)} {repository.Distribution}")
@@ -152,7 +147,7 @@ def PerformClean():
         releaseFiles += repository.GetReleaseFiles()
 
     for releaseFile in releaseFiles:
-        filesToKeep.append(os.path.normpath(SanitiseUri(releaseFile)))
+        filesToKeep.append(normpath(SanitiseUri(releaseFile)))
 
     # 3. Parse the Release files for the list of Index files that are on Disk
     indexFiles = []
@@ -160,19 +155,19 @@ def PerformClean():
         indexFiles += repository.ParseReleaseFilesFromLocalMirror()
 
     for indexFile in indexFiles:
-        filesToKeep.append(os.path.normpath(SanitiseUri(indexFile)))
+        filesToKeep.append(normpath(SanitiseUri(indexFile)))
 
     # 4. Generate list of all files on disk according to the Index files
     logger.info("Reading all Packages...")
     fileList = []
-    for repository in tqdm.tqdm(cleanRepositories, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+    for repository in tqdm(cleanRepositories, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
         fileList += repository.ParseIndexFilesFromLocalMirror()
 
     # Packages potentially add duplicates - remove duplicates now
     requiredFiles = [] # type: list[str]
     requiredFiles = list(set(filesToKeep)) + [x.Filename for x in fileList]
 
-    os.chdir(Settings.MirrorPath())
+    chdir(Settings.MirrorPath())
 
     Clean(cleanRepositories, requiredFiles)
 
@@ -195,7 +190,7 @@ def PerformMirroring():
     logger.debug("Adding Release Files to filesToKeep:")
     for releaseFile in releaseFiles:
         logger.debug(f"\t{SanitiseUri(releaseFile)}")
-        filesToKeep.append(os.path.normpath(SanitiseUri(releaseFile)))
+        filesToKeep.append(normpath(SanitiseUri(releaseFile)))
 
     logger.info(f"Compiled a list of {len(releaseFiles)} Release files for download")
     Downloader.Download(releaseFiles, UrlType.Release)
@@ -215,9 +210,8 @@ def PerformMirroring():
     logger.debug("Adding Index Files to filesToKeep:")
     for indexFile in indexFiles:
         logger.debug(f"\t{SanitiseUri(indexFile)}")
-        filesToKeep.append(os.path.normpath(SanitiseUri(indexFile)))
+        filesToKeep.append(normpath(SanitiseUri(indexFile)))
 
-    print()
     logger.info(f"Compiled a list of {len(indexFiles)} Index files for download")
     Downloader.Download(indexFiles, UrlType.Index)
 
@@ -227,15 +221,13 @@ def PerformMirroring():
         repository.Timestamp()
 
     # 3. Unzip each of the Packages / Sources indices and obtain a list of all files to download
-    print()
     logger.info("Decompressing Packages / Sources Indices...")
-    for repository in tqdm.tqdm(repositories, position=0, unit=" repo", desc="Repositories ", disable=not Settings.ProgressBarsEnabled()):
+    for repository in tqdm(repositories, position=0, unit=" repo", desc="Repositories ", disable=not Settings.ProgressBarsEnabled()):
         repository.DecompressIndexFiles()
 
     # 4. Parse all Index files (Package or Source) to collate all files that need to be downloaded
-    print()
     logger.info("Building file list...")
-    for repository in tqdm.tqdm([x for x in repositories if x.Modified], position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+    for repository in tqdm([x for x in repositories if x.Modified], position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
         filesToDownload += repository.ParseIndexFiles()
 
     # Packages potentially add duplicate downloads, slowing down the rest
@@ -250,31 +242,29 @@ def PerformMirroring():
     downloadSize = ConvertSize(sum([x.Size for x in filesToDownload if not x.Latest]))
     logger.info(f"Compiled a list of {len([x for x in filesToDownload if not x.Latest])} Binary and Source files of size {downloadSize} for download")
 
-    os.chdir(Settings.MirrorPath())
+    chdir(Settings.MirrorPath())
     if not Settings.Test():
         Downloader.Download([x.Filename for x in filesToDownload if not x.Latest], UrlType.Archive)
 
     # 6. Copy Skel to Main Archive
     if not Settings.Test():
-        print()
         logger.info("Copying Skel to Mirror")
-        for indexUrl in tqdm.tqdm(filesToKeep, unit=" files", disable=not Settings.ProgressBarsEnabled()):
+        for indexUrl in tqdm(filesToKeep, unit=" files", disable=not Settings.ProgressBarsEnabled()):
             skelFile   = f"{Settings.SkelPath()}/{SanitiseUri(indexUrl)}"
-            if os.path.isfile(skelFile):
+            if isfile(skelFile):
                 mirrorFile = f"{Settings.MirrorPath()}/{SanitiseUri(indexUrl)}"
                 copy = True
-                if os.path.isfile(mirrorFile):
+                if isfile(mirrorFile):
                     # Compare files using Timestamp to save moving files that don't need to be
-                    skelTimestamp   = os.path.getmtime(Path(skelFile))
-                    mirrorTimestamp = os.path.getmtime(Path(mirrorFile))
+                    skelTimestamp   = getmtime(Path(skelFile))
+                    mirrorTimestamp = getmtime(Path(mirrorFile))
                     copy = skelTimestamp > mirrorTimestamp
 
                 if copy:
-                    os.makedirs(Path(mirrorFile).parent.absolute(), exist_ok=True)
+                    makedirs(Path(mirrorFile).parent.absolute(), exist_ok=True)
                     copyfile(skelFile, mirrorFile)
 
     # 7. Remove any unused files
-    print()
     if Settings.CleanEnabled():
         PostMirrorClean()
     else:
@@ -284,14 +274,13 @@ def PerformMirroring():
         # Remove Release Files and Index Files added to /skel to ensure normal processing
         # next time the application is run, otherwise the app will think it has all
         # the latest files downloaded, when actually it only has the latest /skel Index files
-        print()
-        os.chdir(Settings.SkelPath())
+        chdir(Settings.SkelPath())
 
         logger.info("Test mode - Removing Release and Index files from /skel")
         for skelFile in releaseFiles + indexFiles:
-            file = os.path.normpath(f"{Settings.SkelPath()}/{SanitiseUri(skelFile)}")
-            if os.path.isfile(file):
-                os.remove(file)
+            file = normpath(f"{Settings.SkelPath()}/{SanitiseUri(skelFile)}")
+            if isfile(file):
+                remove(file)
 
 def GetConfig(conf: str) -> list:
     """Attempt to read the configuration file using the path provided.
@@ -300,7 +289,7 @@ def GetConfig(conf: str) -> list:
        will be written using the path provided, and the application
        will exit.
     """
-    if not os.path.isfile(conf):
+    if not isfile(conf):
         logger.info("Configuration file not found. Creating default...")
         CreateConfig(conf)
         sys_exit()
@@ -320,11 +309,11 @@ def CreateConfig(conf: str):
     """
 
     path = Path(conf)
-    if not os.path.isdir(path.parent.absolute()):
+    if not isdir(path.parent.absolute()):
         logger.error("Path for configuration file not valid. Application exiting.")
         sys_exit()
 
-    defaultConfigPath = f"{site.USER_BASE}/refrapt/refrapt.conf.example"
+    defaultConfigPath = f"~/refrapt/refrapt.conf.example"
     with open(defaultConfigPath, "r") as fIn:
         with open(conf, "w") as f:
             f.writelines(fIn.readlines())
@@ -339,14 +328,14 @@ def Clean(repos: list, requiredFiles: list):
     logger.info("\tCompiling list of files to clean...")
     uris = {repository.Uri.rstrip('/') for repository in repos}
 
-    for uri in tqdm.tqdm(uris, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+    for uri in tqdm(uris, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
         walked = [] # type: list[str]
-        for root, _, files in tqdm.tqdm(os.walk(SanitiseUri(uri)), position=1, unit=" fso", desc="FSO          ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
-            for file in tqdm.tqdm(files, position=2, unit=" file", desc="Files        ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
-                walked.append(os.path.join(root, file))
+        for root, _, files in tqdm(walk(SanitiseUri(uri)), position=1, unit=" fso", desc="FSO          ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
+            for file in tqdm(files, position=2, unit=" file", desc="Files        ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
+                walked.append(join(root, file))
 
         logger.debug(f"{SanitiseUri(uri)}: Walked {len(walked)} items")
-        items += [os.path.normpath(x) for x in walked if os.path.normpath(x) not in requiredFiles and not os.path.islink(x)]
+        items += [normpath(x) for x in walked if normpath(x) not in requiredFiles and not islink(x)]
 
     # 5a. Remove any duplicate items
     items = list(set(items))
@@ -359,8 +348,8 @@ def Clean(repos: list, requiredFiles: list):
     if items:
         logger.info("\tCalculating space savings...")
         clearSize = 0
-        for file in tqdm.tqdm(items, unit=" files", leave=False, disable=not Settings.ProgressBarsEnabled()):
-            clearSize += os.path.getsize(file)
+        for file in tqdm(items, unit=" files", leave=False, disable=not Settings.ProgressBarsEnabled()):
+            clearSize += getsize(file)
     else:
         logger.info("\tNo files eligible to clean")
         return
@@ -373,7 +362,7 @@ def Clean(repos: list, requiredFiles: list):
 
     # 7. Clean files
     for item in items:
-        os.remove(item)
+        remove(item)
 
 def PostMirrorClean():
     """Clean any files or directories that are not used.
@@ -414,7 +403,7 @@ def PostMirrorClean():
     # to build a full list of maintained files.
     logger.info("\tProcessing unmodified Indices...")
     umodifiedFiles = [] # type: list[str]
-    for repository in tqdm.tqdm(allUriRepositories, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
+    for repository in tqdm(allUriRepositories, position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
         umodifiedFiles += repository.ParseUnmodifiedIndexFiles()
 
     # Packages potentially add duplicate downloads, slowing down the rest
