@@ -1,10 +1,8 @@
 from multiprocessing import cpu_count
-from logging import getLogger, _nameToLevel
+from logging import Logger, _nameToLevel
 from pathlib import Path
 from platform import machine
 from locale import getlocale
-
-logger = getLogger(__name__)
 
 class Settings:
     """Contains the loaded settings for the application."""
@@ -40,7 +38,7 @@ class Settings:
     _previousRunInterrupted = False
 
     @staticmethod
-    def Parse(config: list):
+    def Parse(config: list, logger: Logger):
         """Parse the configuration file and set the settings defined."""
         for line in config:
             if line.lstrip().startswith("set"):

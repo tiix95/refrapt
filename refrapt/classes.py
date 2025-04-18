@@ -1,7 +1,7 @@
 """Classes for abstraction and use with Refrapt."""
 
 from enum import Enum
-from logging import getLogger, debug, CRITICAL
+from logging import Logger, getLogger, CRITICAL
 from os.path import isfile, isdir, normpath, getsize, getmtime, splitext
 from os import listdir, remove, sep, system
 from multiprocessing import Pool, current_process
@@ -17,8 +17,6 @@ from filelock import FileLock
 
 from refrapt.helpers import SanitiseUri, UnzipFile
 from refrapt.settings import Settings
-
-logger = getLogger(__name__)
 
 class RepositoryType(Enum):
     """Distinguish between Binary and Source mirrors."""
@@ -55,7 +53,8 @@ class Package:
 
 class Repository:
     """Represents a Repository as defined the Configuration file."""
-    def __init__(self, line, defaultArch):
+
+    def __init__(self, line, defaultArch, logger: Logger) -> None:
         """Initialises a Repository with a line from the Configuration file and the default Architecture."""
         self._repositoryType = RepositoryType.Bin
         self._architectures = [] # type: list[str]
@@ -63,6 +62,7 @@ class Repository:
         self._distribution = None
         self._components = [] # type: list[str]
         self._clean = True
+        self.logger = logger
 
         # Remove any inline comments
         if "#" in line:
@@ -102,15 +102,15 @@ class Repository:
         self._packageCollection = PackageCollection(self._components, self._architectures)
         self._sourceCollection  = SourceCollection(self._components)
 
-        logger.debug("Repository")
-        logger.debug(f"\tKind:         {self._repositoryType}")
-        logger.debug(f"\tArch:         {self._architectures}")
-        logger.debug(f"\tUri:          {self._uri}")
-        logger.debug(f"\tDistribution: {self._distribution}")
-        logger.debug(f"\tComponents:   {self._components}")
-        logger.debug(f"\tPackage Coll: {self._packageCollection}")
-        logger.debug(f"\tSource Coll:  {self._sourceCollection}")
-        logger.debug(f"\tFlat:         {not self._components}")
+        self.logger.debug("Repository")
+        self.logger.debug(f"\tKind:         {self._repositoryType}")
+        self.logger.debug(f"\tArch:         {self._architectures}")
+        self.logger.debug(f"\tUri:          {self._uri}")
+        self.logger.debug(f"\tDistribution: {self._distribution}")
+        self.logger.debug(f"\tComponents:   {self._components}")
+        self.logger.debug(f"\tPackage Coll: {self._packageCollection}")
+        self.logger.debug(f"\tSource Coll:  {self._sourceCollection}")
+        self.logger.debug(f"\tFlat:         {not self._components}")
 
     def GetReleaseFiles(self) -> list:
         """
@@ -200,7 +200,7 @@ class Repository:
                         # parts[2] = filename
 
                         if not len(parts) == 3:
-                            logger.warning(f"Malformed checksum line '{line}' in {releaseFileToRead}")
+                            self.logger.warning(f"Malformed checksum line '{line}' in {releaseFileToRead}")
                             continue
 
                         checksum = parts[0].strip()
@@ -329,7 +329,7 @@ class Repository:
             indexType = "Sources      "
 
         with Pool(Settings.Threads()) as pool:
-            for _ in tqdm(pool.imap_unordered(UnzipFile, indexFiles), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
+            for _ in tqdm(pool.imap_unordered(UnzipFile, (indexFiles, self.logger)), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
                 pass
 
     def ParseIndexFiles(self) -> list[Package]:
@@ -403,7 +403,7 @@ class Repository:
 
         repositoryDirectory = Settings.SkelPath() + "/" + SanitiseUri(self._uri)
 
-        logger.debug(f"Checking repo exists: {repositoryDirectory}")
+        self.logger.debug(f"Checking repo exists: {repositoryDirectory}")
 
         path = Path(repositoryDirectory)
         return isdir(path.parent.absolute())
@@ -460,9 +460,9 @@ class Repository:
                             packageList.append(Package(normpath(f"{path}/{directory}/{filename}"), size, skipUpdateCheck or not self._NeedUpdate(normpath(f"{mirror}/{directory}/{filename}"), size)))
 
         if [x for x in packageList if not x.Latest]:
-            logger.debug(f"Packages to update ({len([x for x in packageList if not x.Latest])}):")
+            self.logger.debug(f"Packages to update ({len([x for x in packageList if not x.Latest])}):")
             for pkg in [x.Filename for x in packageList if not x.Latest]:
-                logger.debug(f"\t{pkg}")
+                self.logger.debug(f"\t{pkg}")
 
         return packageList
 
@@ -645,14 +645,14 @@ class PackageCollection(IndexCollection):
     def DetermineCurrentTimestamps(self):
         """For each file stored in this collection, determine the current timestamp of the file, and record it."""
 
-        logger.debug("Getting timestamps of current files in Skel (if available)")
+        self.logger.debug("Getting timestamps of current files in Skel (if available)")
         # Gather timestamps for all files (that exist)
         for component in self._packageCollection:
             for architecture in self._packageCollection[component]:
                 for file in self._packageCollection[component][architecture]:
                     if isfile(f"{Settings.SkelPath()}/{file}"):
                         self._packageCollection[component][architecture][file].Current = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
-                        logger.debug(f"\tCurrent: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Current}")
+                        self.logger.debug(f"\tCurrent: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Current}")
 
     def DetermineDownloadTimestamps(self):
         """For each file stored in this collection, determine the current timestamp of the file, and record it.
@@ -660,7 +660,7 @@ class PackageCollection(IndexCollection):
            If a file does not exist on disk after the download, then it will be removed from this collection.
         """
 
-        logger.debug("Getting timestamps of downloaded files in Skel")
+        self.logger.debug("Getting timestamps of downloaded files in Skel")
         removables = defaultdict(dict) # type: dict[str, dict[str, list[str]]]
         for component in self._packageCollection:
             for architecture in self._packageCollection[component]:
@@ -671,11 +671,11 @@ class PackageCollection(IndexCollection):
                 for file in self._packageCollection[component][architecture]:
                     if isfile(f"{Settings.SkelPath()}/{file}"):
                         self._packageCollection[component][architecture][file].Download = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
-                        logger.debug(f"\tDownload: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Download}")
+                        self.logger.debug(f"\tDownload: [{component}] [{architecture}] [{file}]: {self._packageCollection[component][architecture][file].Download}")
                     else:
                         # File does not exist after download, therefore it does not exist in the repository, and can be marked for removal
                         removables[component][architecture].append(file)
-                        logger.debug(f"\tMarked for removal (does not exist): [{component}] [{architecture}] [{file}]")
+                        self.logger.debug(f"\tMarked for removal (does not exist): [{component}] [{architecture}] [{file}]")
 
         # Remove marked files
         for component in removables:
@@ -729,13 +729,13 @@ class SourceCollection(IndexCollection):
     def DetermineCurrentTimestamps(self):
         """For each file stored in this collection, determine the current timestamp of the file, and record it."""
 
-        logger.debug("Getting timestamps of current files in Skel (if available)")
+        self.logger.debug("Getting timestamps of current files in Skel (if available)")
         # Gather timestamps for all files (that exist)
         for component in self._sourceCollection:
             for file in self._sourceCollection[component]:
                 if isfile(f"{Settings.SkelPath()}/{file}"):
                     self._sourceCollection[component][file].Current = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
-                    logger.debug(f"\tCurrent: [{component}] [{file}]: {self._sourceCollection[component][file].Current}")
+                    self.logger.debug(f"\tCurrent: [{component}] [{file}]: {self._sourceCollection[component][file].Current}")
 
     def DetermineDownloadTimestamps(self):
         """For each file stored in this collection, determine the current timestamp of the file, and record it.
@@ -743,7 +743,7 @@ class SourceCollection(IndexCollection):
            If a file does not exist on disk after the download, then it will be removed from this collection.
         """
 
-        logger.debug("Getting timestamps of downloaded files in Skel")
+        self.logger.debug("Getting timestamps of downloaded files in Skel")
         removables = defaultdict(dict) # type: dict[str, list[str]]
         for component in self._sourceCollection:
             removables[component] = list()
@@ -752,11 +752,11 @@ class SourceCollection(IndexCollection):
             for file in self._sourceCollection[component]:
                 if isfile(f"{Settings.SkelPath()}/{file}"):
                     self._sourceCollection[component][file].Download = getmtime(Path(f"{Settings.SkelPath()}/{SanitiseUri(file)}"))
-                    logger.debug(f"\tDownload: [{component}] [{file}]: {self._sourceCollection[component][file].Download}")
+                    self.logger.debug(f"\tDownload: [{component}] [{file}]: {self._sourceCollection[component][file].Download}")
                 else:
                     # File does not exist after download, therefore it does not exist in the repository, and can be marked for removal
                     removables[component].append(file)
-                    logger.debug(f"\tMarked for removal (does not exist): [{component}] [{file}]")
+                    self.logger.debug(f"\tMarked for removal (does not exist): [{component}] [{file}]")
 
         # Remove marked files
         for component in removables:
@@ -808,12 +808,12 @@ class Downloader:
     def Download(urls: list, kind: UrlType):
         """Download a list of files of a specific type"""
         if not urls:
-            logger.info("No files to download")
+            self.logger.info("No files to download")
             return
 
         arguments = Downloader.CustomArguments()
 
-        logger.info(f"Downloading {len(urls)} {kind.name} files...")
+        self.logger.info(f"Downloading {len(urls)} {kind.name} files...")
 
         with Pool(Settings.Threads()) as pool:
             downloadFunc = partial(Downloader.DownloadUrlsProcess, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
@@ -943,17 +943,3 @@ class Index:
                         key = None
 
         return packages
-
-class LogFilter():
-    """Class to provide filtering for logging.
-
-       The Level passed to this class will define the minimum
-       log level that is allowed by logger.
-    """
-    def __init__(self, level):
-        """Initialise the filter level."""
-        self.__level = level
-
-    def filter(self, logRecord):
-        """Return whether the Record is covered by a filter or not."""
-        return logRecord.levelno >= self.__level

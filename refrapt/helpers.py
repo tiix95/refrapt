@@ -6,9 +6,7 @@ from gzip import open as gzip_open
 from lzma import open as lzma_open
 from bz2 import open as bz2_open
 from shutil import copyfileobj
-from logging import getLogger
-
-logger = getLogger(__name__)
+from logging import Logger
 
 def SanitiseUri(uri: str) -> str:
     """Sanitise a Uri so it is suitable for filesystem use."""
@@ -17,7 +15,7 @@ def SanitiseUri(uri: str) -> str:
 
     return uri
 
-def UnzipFile(file: str):
+def UnzipFile(file: str, logger: Logger):
     """
         Finds the first file matching a supported compression format and unzips it.
 
