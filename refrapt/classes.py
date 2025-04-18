@@ -100,7 +100,7 @@ class Repository:
             self._components = []
 
         self._packageCollection = PackageCollection(self._components, self._architectures, self.logger)
-        self._sourceCollection  = SourceCollection(self._components)
+        self._sourceCollection  = SourceCollection(self._components, self.logger)
 
         self.logger.debug("Repository")
         self.logger.debug(f"\tKind:         {self._repositoryType}")
@@ -718,9 +718,10 @@ class SourceCollection(IndexCollection):
         - https://wiki.debian.org/DebianRepository/Format#A.22Sources.22_Indices
     """
 
-    def __init__(self, components: list):
+    def __init__(self, components: list, logger: Logger):
         """Initialises a SourceCollection with a dictionary of each Component."""
         self._sourceCollection = defaultdict(dict) # type: dict[str, dict[str, Timestamp]] # For each component, for each file, timestamp
+        self.logger = logger
 
         # Initialise the collection
         for component in components:
