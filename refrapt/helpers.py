@@ -15,7 +15,7 @@ def SanitiseUri(uri: str) -> str:
 
     return uri
 
-def UnzipFile(file: str, logger: Logger):
+def UnzipFile(file: str):
     """
         Finds the first file matching a supported compression format and unzips it.
 
@@ -52,4 +52,4 @@ def UnzipFile(file: str, logger: Logger):
             with open(file, "wb") as out:
                 copyfileobj(f, out)
     else:
-        logger.warning(f"File '{file}' has an unsupported compression format")
+        return TypeError(f"File '{file}' has an unsupported compression format")

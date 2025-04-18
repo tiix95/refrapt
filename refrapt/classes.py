@@ -99,7 +99,7 @@ class Repository:
             self._distribution = ""
             self._components = []
 
-        self._packageCollection = PackageCollection(self._components, self._architectures)
+        self._packageCollection = PackageCollection(self._components, self._architectures, self.logger)
         self._sourceCollection  = SourceCollection(self._components)
 
         self.logger.debug("Repository")
@@ -328,9 +328,12 @@ class Repository:
         elif self.RepositoryType == RepositoryType.Src:
             indexType = "Sources      "
 
-        with Pool(Settings.Threads()) as pool:
-            for _ in tqdm(pool.imap_unordered(UnzipFile, (indexFiles, self.logger)), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
-                pass
+        try:
+            with Pool(Settings.Threads()) as pool:
+                for _ in tqdm(pool.imap_unordered(UnzipFile, indexFiles), position=1, total=len(indexFiles), unit=" index", desc=indexType, leave=False, disable=not Settings.ProgressBarsEnabled()):
+                    pass
+        except TypeError as t_err:
+            self.logger.error(t_err)
 
     def ParseIndexFiles(self) -> list[Package]:
         """
@@ -629,9 +632,10 @@ class PackageCollection(IndexCollection):
         - https://wiki.debian.org/DebianRepository/Format#A.22Packages.22_Indices
     """
 
-    def __init__(self, components: list, architectures: list):
+    def __init__(self, components: list, architectures: list, logger: Logger):
         """Initialises a PackageCollection with a dictionary of each Component and Architecture."""
         self._packageCollection = defaultdict(lambda : defaultdict(dict)) # type: dict[str, dict[str, dict[str, Timestamp]]] # For each component, each architecture, for each file, timestamp
+        self.logger = logger
 
         # Initialise the collection
         for component in components:
@@ -805,15 +809,15 @@ class Downloader:
                 remove(f"{Settings.VarPath()}/{file}")
 
     @staticmethod
-    def Download(urls: list, kind: UrlType):
+    def Download(urls: list, kind: UrlType, logger: Logger):
         """Download a list of files of a specific type"""
         if not urls:
-            self.logger.info("No files to download")
+            logger.info("No files to download")
             return
 
         arguments = Downloader.CustomArguments()
 
-        self.logger.info(f"Downloading {len(urls)} {kind.name} files...")
+        logger.info(f"Downloading {len(urls)} {kind.name} files...")
 
         with Pool(Settings.Threads()) as pool:
             downloadFunc = partial(Downloader.DownloadUrlsProcess, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())

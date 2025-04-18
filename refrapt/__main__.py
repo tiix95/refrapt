@@ -186,7 +186,7 @@ class Refrapt:
             self.filesToKeep.append(normpath(SanitiseUri(releaseFile)))
 
         self.logger.info(f"Compiled a list of {len(releaseFiles)} Release files for download")
-        Downloader.Download(releaseFiles, UrlType.Release)
+        Downloader.Download(releaseFiles, UrlType.Release, self.logger)
 
         # 1a. Verify after the download that the Repositories actually exist
         allRepos = list(self.repositories)
@@ -206,7 +206,7 @@ class Refrapt:
             self.filesToKeep.append(normpath(SanitiseUri(indexFile)))
 
         self.logger.info(f"Compiled a list of {len(indexFiles)} Index files for download")
-        Downloader.Download(indexFiles, UrlType.Index)
+        Downloader.Download(indexFiles, UrlType.Index, self.logger)
 
         # Record timestamps of downloaded files to later detemine which files have changed,
         # and therefore need to be processsed
@@ -237,7 +237,7 @@ class Refrapt:
 
         chdir(Settings.MirrorPath())
         if not Settings.Test():
-            Downloader.Download([x.Filename for x in filesToDownload if not x.Latest], UrlType.Archive)
+            Downloader.Download([x.Filename for x in filesToDownload if not x.Latest], UrlType.Archive, self.logger)
 
         # 6. Copy Skel to Main Archive
         if not Settings.Test():
