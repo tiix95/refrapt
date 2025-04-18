@@ -430,7 +430,7 @@ class Repository:
 
         indexFile = Index(f"{indexRoot}/{index}")
         indexFile.Read()
-        debug(f"Processing Index file: {indexRoot}/{index}")
+        self.logger.debug(f"Processing Index file: {indexRoot}/{index}")
 
         packages = indexFile.GetPackages() # type: list[dict[str,str]]
 

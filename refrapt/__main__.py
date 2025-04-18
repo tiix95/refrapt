@@ -64,11 +64,8 @@ class Refrapt:
             sys_exit()
 
         # Create working directories
-        self.logger.info(f"-----------------> Creating {Settings.MirrorPath()}")
         Path(Settings.MirrorPath()).mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"-----------------> Creating {Settings.SkelPath()}")
         Path(Settings.SkelPath()).mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"-----------------> Creating {Settings.VarPath()}")
         Path(Settings.VarPath()).mkdir(parents=True, exist_ok=True)
 
         Downloader.Init()
