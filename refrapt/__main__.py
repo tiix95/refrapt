@@ -15,6 +15,7 @@ from tqdm import tqdm
 from filelock import FileLock
 
 from refrapt.classes import (
+    NetbootRepo,
     Repository,
     UrlType,
     Downloader,
@@ -32,6 +33,7 @@ class Refrapt:
         self.repositories: List[Repository] = []
         self.filesToKeep: List[str] = []
         self.appLockFile = "refrapt-lock"
+
 
     def main(self, conf: str, test: bool = False, clean: bool = True, no_progress: bool = True):
         """A tool to mirror Debian Repositories for use as a local mirror."""
@@ -220,13 +222,27 @@ class Refrapt:
         for repository in tqdm([x for x in self.repositories if x.Modified], position=0, unit=" repo", desc="Repositories ", leave=False, disable=not Settings.ProgressBarsEnabled()):
             filesToDownload += repository.ParseIndexFiles()
 
+        #for file in filesToDownload:
+        #    self.logger.debug(f' TO DOWNLOAD : {file}')
+        # 4.5. Add netboot files to download if installer-amd64 is in repo list
+        for repo in self.repositories:
+            self.logger.debug(repo._components)
+            if 'main/installer-amd64' in repo._components:
+                self.logger.info('Adding netboot files to filesToDownload')
+                netbootrepo = NetbootRepo(self.logger)
+                filesToDownload += netbootrepo.ParseRepo(netbootrepo._url)
+
+        self.logger.debug(f"Files to download: {len(filesToDownload)}")
+        #for file in filesToDownload:
+        #    self.logger.debug(f' TO DOWNLOAD : {file._Filename}')
+
         # Packages potentially add duplicate downloads, slowing down the rest
         # of the process. To counteract, remove duplicates now
         self.filesToKeep = list(set(self.filesToKeep)) + [x.Filename for x in filesToDownload]
 
         self.logger.debug(f"Files to keep: {len(self.filesToKeep)}")
-        for file in self.filesToKeep:
-            self.logger.debug(f"\t{file}")
+        #for file in self.filesToKeep:
+        #    self.logger.debug(f"\tTO KEEP : {file}")
 
         # 5. Perform the main download of Binary and Source files
         downloadSize = self.ConvertSize(sum([x.Size for x in filesToDownload if not x.Latest]))
@@ -235,6 +251,7 @@ class Refrapt:
         chdir(Settings.MirrorPath())
         if not Settings.Test():
             Downloader.Download([x.Filename for x in filesToDownload if not x.Latest], UrlType.Archive, self.logger)
+
 
         # 6. Copy Skel to Main Archive
         if not Settings.Test():
