@@ -6,7 +6,9 @@ from os.path import isfile, isdir, normpath, getsize, getmtime, splitext
 from os import listdir, remove, sep, system
 from multiprocessing import Pool, current_process
 from urllib.parse import urljoin
-from requests import get
+from requests import get, Session
+from requests.exceptions import RequestsException
+from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from re import search, match
 from functools import partial
@@ -14,9 +16,10 @@ from dataclasses import dataclass
 from collections import defaultdict
 from pathlib import Path
 from abc import ABC, abstractmethod
-
+from time import sleep
 from tqdm import tqdm
 from filelock import FileLock
+from urllib3.util.retry import Retry
 
 from refrapt.helpers import SanitiseUri, UnzipFile, convert_to_bytes
 from refrapt.settings import Settings
@@ -925,12 +928,13 @@ class Downloader:
             logger.info("No files to download")
             return
 
-        arguments = Downloader.CustomArguments()
+        arguments, pyarguments = Downloader.CustomArguments()
 
         logger.info(f"Downloading {len(urls)} {kind.name} files...")
 
         with Pool(Settings.Threads()) as pool:
             downloadFunc = partial(Downloader.DownloadUrlsProcess, logger=logger, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
+            #downloadFunc = partial(Downloader.PyDownloadUrlsProcess, logger=logger, kind=kind.name, args=pyarguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
             for _ in tqdm(pool.imap_unordered(downloadFunc, urls), total=len(urls), unit=" file", disable=not Settings.ProgressBarsEnabled()):
                 pass
 
@@ -966,9 +970,53 @@ class Downloader:
             remove(filename)
 
     @staticmethod
+    def PyDownloadUrlsProcess(url: str, logger: Logger, kind: str, args: list, logPath: str, rateLimit: str):
+    #def download_with_requests(url, proxy=None, limit_rate=None, retries=20, retry_on_errors=[503, 429], log_file='/tmp/tmpri9_x9mu/Archive-log.20'):
+        proxies = {
+            'http': args['http_proxy'],
+            'https': args['https_proxy']
+        } if args['proxy'] else None
+
+        session = Session()
+
+        retry_strategy = Retry(
+            total=20,
+            backoff_factor=1,  # temps d'attente entre les tentatives (1, 2, 4, etc.)
+            status_forcelist=[503, 429],
+            method_whitelist=["HEAD", "GET"]  # méthodes autorisées pour le retry
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        normalisedUrl = url.replace(sep, '/')
+
+        # TODO : Limit rate
+
+        try:
+            logger.debug(f'------> DOWNLOADING {normalisedUrl}')
+            response = session.get(normalisedUrl, proxies=proxies, stream=True)
+
+            if response.status_code == 200:
+                logger.debug(f'------> DOWNLOADED {normalisedUrl}')
+                with open(normalisedUrl.split('/')[-1], 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            f.write(chunk)
+            else:
+                logger.debug(f"------> FAILED TO DOWNLOAD: {normalisedUrl}, status code {response.status_code}\n")
+
+                #sleep(60)  # waitretry=60
+
+        except RequestException as err:
+            logger.error(f"ERROR DURING DOWNLOAD : {err}")
+
+    @staticmethod
     def CustomArguments() -> list:
         """Creates custom Wget arguments based on the Settings provided."""
         arguments = []
+        pyarguments = {}
 
         if Settings.AuthNoChallege():
             arguments.append("--auth-no-challenge")
@@ -986,17 +1034,22 @@ class Downloader:
 
         if Settings.UseProxy():
             arguments.append("-e use_proxy=yes")
+            pyarguments['proxy'] = True
 
             if Settings.HttpProxy():
                 arguments.append("-e http_proxy=" + Settings.HttpProxy())
+                pyarguments['http_proxy'] = Settings.HttpProxy()
             if Settings.HttpsProxy():
                 arguments.append("-e https_proxy=" + Settings.HttpsProxy())
+                pyarguments['https_proxy'] = Settings.HttpsProxy()
             if Settings.ProxyUser():
                 arguments.append("-e proxy_user=" + Settings.ProxyUser())
+                pyarguments['proxy_user'] = Settings.ProxyUser()
             if Settings.ProxyPassword():
                 arguments.append("-e proxy_password=" + Settings.ProxyPassword())
+                pyarguments['proxy_password'] = Settings.ProxyPassword()
 
-        return arguments
+        return (arguments, pyarguments)
 
 class Index:
     """Represents an Index file."""
