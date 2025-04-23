@@ -5,6 +5,9 @@ from logging import Logger, getLogger, CRITICAL
 from os.path import isfile, isdir, normpath, getsize, getmtime, splitext
 from os import listdir, remove, sep, system
 from multiprocessing import Pool, current_process
+from urllib.parse import urljoin
+from requests import get
+from bs4 import BeautifulSoup
 from re import search, match
 from functools import partial
 from dataclasses import dataclass
@@ -15,7 +18,7 @@ from abc import ABC, abstractmethod
 from tqdm import tqdm
 from filelock import FileLock
 
-from refrapt.helpers import SanitiseUri, UnzipFile
+from refrapt.helpers import SanitiseUri, UnzipFile, convert_to_bytes
 from refrapt.settings import Settings
 
 class RepositoryType(Enum):
@@ -50,6 +53,109 @@ class Package:
     def Latest(self) -> bool:
         """Gets whether the file is up to date."""
         return self._Latest
+
+class NetbootRepo:
+    """Kind of static repository for netboot (main/installer-amd64)"""
+
+    def __init__(self, logger: Logger) -> None:
+
+        self.logger = logger
+        self._url = 'https://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/'
+        self._short_url = self._url.split('//')[1]
+        #self.md5sums = self.GetChecksums('MD5SUMS')
+        #self.sha256sums = self.GetChecksums('SHA256SUMS')
+
+    def ParseRepo(self, url) -> list:
+
+        response = get(url, timeout=3)
+        self.logger.debug(f'Getting links in {url}')
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        _files = []
+        _links = soup.find_all('a', href=True)
+
+        for _link in _links:
+            _url = urljoin(url, _link['href'])
+            _short_url = _url.split('//')[1]
+
+            if _link['href'].startswith('?') or _link['href'].startswith('/debian'):
+                self.logger.debug(f'Ignoring {_link["href"]}')
+                continue
+
+            self.logger.debug(f'Parsing files on {_url}')
+
+            if _url.endswith('/'):
+                self.logger.debug(f'Directory found, launching recursive call : {_url}')
+                _files.extend(self.ParseRepo(_url))  # recursive call for directories
+
+            else:
+                _fname = f'{_short_url}'
+
+                mirror = Settings.MirrorPath()
+
+                try:
+                    date_size = _link.find_parent('tr').find_all('td')
+                    _fsize = convert_to_bytes(date_size[3].text.strip())
+                    self.logger.debug(f'File found : {_fname}')
+                    self.logger.debug(f'Checking existance and size of {normpath(f"{mirror}/{_fname}")} before adding...')
+                    self.logger.debug(f'Need update : {self._NeedUpdate(normpath(f"{mirror}/{_fname}"), _fsize)}')
+                    _files.append(Package(normpath(_fname), _fsize, not self._NeedUpdate(normpath(f"{mirror}/{_fname}"), _fsize)))
+
+                except Exception as err:
+                    self.logger.error(f'cannot find fsize or fdate for {_url}: {err}')
+
+        return _files
+
+    def GetChecksums(self, uri: str) -> list:
+
+        _raw = get(f'{self._url}/{uri}', timeout=3).text
+        self.logger.debug(f'Getting {uri}')
+
+        checksums = {}
+        for line in _raw.split('\n'):
+            if line:
+                _fname = '/'.join(line.split('  ')[1].split('/')[1::])
+                checksum = line.split('  ')[0]
+                filename = f'{self._short_url}/{_fname}'
+                checksums[filename] = checksum
+
+        return checksums
+
+    def _NeedUpdate(self, path: str, size: int) -> bool:
+        """
+            Looted from Repository class
+
+            Determine whether a file needs updating.
+
+            If the file exists on disk, its size is compared
+            to that listed in the Package. The result of the
+            comparison determines whether the file should be
+            downloaded.
+
+            If the file does not exist, it must be downloaded.
+
+            Function can be forced to always return True
+            in the event that the correct setting is applied
+            in the Configuration file.
+        """
+
+        # Realistically, this is a bad check, as the size
+        # could remain the same, but source may have changed.
+        # Allow the user to force an update via Settings.
+
+        # Ideally, a comparison of the checksum listed in the Package
+        # and the actual file would be good, but potentially slow
+
+        if Settings.ForceUpdate():
+            return True
+
+        if isfile(path):
+            self.logger.debug(f"file {path} found, comparing size")
+            return getsize(path) != size
+
+        self.logger.debug(f"file {path} not found, need update")
+        return True
 
 class Repository:
     """Represents a Repository as defined the Configuration file."""
@@ -285,6 +391,7 @@ class Repository:
         for file in indexFiles:
             file = normpath(file)
 
+        self.logger.debug(indexFiles)
         return list(set(indexFiles)) # Remove duplicates caused by reading multiple listings for each checksum type
 
     def ParseReleaseFilesFromLocalMirror(self) -> list:
@@ -439,6 +546,8 @@ class Repository:
         for package in tqdm(packages, position=2, unit=" pkgs", desc="Packages     ", leave=False, delay=0.5, disable=not Settings.ProgressBarsEnabled()):
             if "Filename" in package:
                 # Packages Index
+
+                self.logger.error(package)
                 filename = package["Filename"]
 
                 if filename.startswith("./"):
@@ -821,12 +930,12 @@ class Downloader:
         logger.info(f"Downloading {len(urls)} {kind.name} files...")
 
         with Pool(Settings.Threads()) as pool:
-            downloadFunc = partial(Downloader.DownloadUrlsProcess, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
+            downloadFunc = partial(Downloader.DownloadUrlsProcess, logger=logger, kind=kind.name, args=arguments, logPath=Settings.VarPath(), rateLimit=Settings.LimitRate())
             for _ in tqdm(pool.imap_unordered(downloadFunc, urls), total=len(urls), unit=" file", disable=not Settings.ProgressBarsEnabled()):
                 pass
 
     @staticmethod
-    def DownloadUrlsProcess(url: str, kind: str, args: list, logPath: str, rateLimit: str):
+    def DownloadUrlsProcess(url: str, logger: Logger, kind: str, args: list, logPath: str, rateLimit: str):
         """Worker method for downloading a particular Url, used in multiprocessing."""
         process = current_process()
 
@@ -840,11 +949,13 @@ class Downloader:
 
         # Ensure forward slashes are used for URLs
         normalisedUrl = url.replace(sep, '/')
+        logger.debug(f'------> DOWNLOADING {normalisedUrl}')
 
         command = f"{baseCommand} {rateLimit} {retries} {recursiveOpts} {logFile} {normalisedUrl}"
 
         if args:
             command += f" {' '.join(args)}"
+        #logger.debug(command)
 
         with FileLock(f"{filename}.lock"):
             with open(filename, "w") as f:
