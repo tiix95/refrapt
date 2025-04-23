@@ -8,6 +8,26 @@ from bz2 import open as bz2_open
 from shutil import copyfileobj
 from logging import Logger
 
+def convert_to_bytes(size_str: str) -> int:
+    """Convert size suffix to bytes"""
+
+    size_str = size_str.strip().lower()
+
+    suffixes = {
+        'b': 1,
+        'k': 1024,
+        'm': 1024 * 1024,
+        'g': 1024 * 1024 * 1024,
+        't': 1024 * 1024 * 1024 * 1024,
+    }
+
+    for suffix, factor in suffixes.items():
+        if size_str.endswith(suffix):
+            size_value = float(size_str[:-len(suffix)])
+            return int(size_value * factor)
+
+    return int(size_str)
+
 def SanitiseUri(uri: str) -> str:
     """Sanitise a Uri so it is suitable for filesystem use."""
     uri = sub(r"^(\w+)://", "", uri)
