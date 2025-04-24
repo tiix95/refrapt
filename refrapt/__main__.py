@@ -228,8 +228,12 @@ class Refrapt:
         for repo in self.repositories:
             self.logger.debug(repo._components)
             if 'main/installer-amd64' in repo._components:
-                self.logger.info('Adding netboot files to filesToDownload')
-                netbootrepo = NetbootRepo(self.logger)
+                self.logger.info('Adding amd64 netboot files to filesToDownload')
+                netbootrepo = NetbootRepo(self.logger, 'amd64')
+                filesToDownload += netbootrepo.ParseRepo(netbootrepo._url)
+            if 'main/installer-i386' in repo._components:
+                self.logger.info('Adding i386 netboot files to filesToDownload')
+                netbootrepo = NetbootRepo(self.logger, 'i386')
                 filesToDownload += netbootrepo.ParseRepo(netbootrepo._url)
 
         self.logger.debug(f"Files to download: {len(filesToDownload)}")

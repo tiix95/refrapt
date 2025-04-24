@@ -58,12 +58,12 @@ class Package:
         return self._Latest
 
 class NetbootRepo:
-    """Kind of static repository for netboot (main/installer-amd64)"""
+    """Kind of static repository for netboot (main/installer-xxx)"""
 
-    def __init__(self, logger: Logger) -> None:
+    def __init__(self, logger: Logger, arch: str) -> None:
 
         self.logger = logger
-        self._url = 'https://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/'
+        self._url = f'https://deb.debian.org/debian/dists/bookworm/main/installer-{arch}/current/images/'
         self._short_url = self._url.split('//')[1]
         #self.md5sums = self.GetChecksums('MD5SUMS')
         #self.sha256sums = self.GetChecksums('SHA256SUMS')
