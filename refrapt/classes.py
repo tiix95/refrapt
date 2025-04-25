@@ -6,20 +6,19 @@ from os.path import isfile, isdir, normpath, getsize, getmtime, splitext
 from os import listdir, remove, sep, system
 from multiprocessing import Pool, current_process
 from urllib.parse import urljoin
-from requests import get, Session
-from requests.exceptions import RequestsException
-from requests.adapters import HTTPAdapter
-from bs4 import BeautifulSoup
 from re import search, match
 from functools import partial
 from dataclasses import dataclass
 from collections import defaultdict
 from pathlib import Path
 from abc import ABC, abstractmethod
-from time import sleep
 from tqdm import tqdm
 from filelock import FileLock
+from bs4 import BeautifulSoup
 from urllib3.util.retry import Retry
+from requests import get, Session
+from requests.exceptions import RequestException
+from requests.adapters import HTTPAdapter
 
 from refrapt.helpers import SanitiseUri, UnzipFile, convert_to_bytes
 from refrapt.settings import Settings
@@ -550,7 +549,6 @@ class Repository:
             if "Filename" in package:
                 # Packages Index
 
-                self.logger.error(package)
                 filename = package["Filename"]
 
                 if filename.startswith("./"):
